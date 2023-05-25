@@ -22,6 +22,7 @@
 #include <AP_Math/AP_Math.h>
 #include "AP_MotorsTailsitter.h"
 #include <GCS_MAVLink/GCS.h>
+#include <RC_Channel/RC_Channel.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -31,20 +32,24 @@ extern const AP_HAL::HAL& hal;
 void AP_MotorsTailsitter::init(motor_frame_class frame_class, motor_frame_type frame_type)
 {
     // setup default motor and servo mappings
-    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_throttleRight) || SRV_Channels::function_assigned(SRV_Channel::k_throttleLeft);
+    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_motor1) || SRV_Channels::function_assigned(SRV_Channel::k_motor2) ||
+                       SRV_Channels::function_assigned(SRV_Channel::k_motor3) || SRV_Channels::function_assigned(SRV_Channel::k_motor4);
 
     // right throttle defaults to servo output 1
-    SRV_Channels::set_aux_channel_default(SRV_Channel::k_throttleRight, CH_1);
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_motor1, CH_1);
 
-    // left throttle defaults to servo output 2
-    SRV_Channels::set_aux_channel_default(SRV_Channel::k_throttleLeft, CH_2);
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_motor2, CH_2);
 
-    // right servo defaults to servo output 3
-    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorRight, CH_3);
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_motor3, CH_3);
+
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_motor4, CH_4);
+
+    // left servo defaults to servo output 5
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorLeft, CH_5);
     SRV_Channels::set_angle(SRV_Channel::k_tiltMotorRight, SERVO_OUTPUT_RANGE);
 
-    // left servo defaults to servo output 4
-    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorLeft, CH_4);
+    // right servo defaults to servo output 6
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorRight, CH_6);
     SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE);
 
     _mav_type = MAV_TYPE_VTOL_DUOROTOR;
@@ -68,8 +73,10 @@ void AP_MotorsTailsitter::set_update_rate(uint16_t speed_hz)
     // record requested speed
     _speed_hz = speed_hz;
 
-    SRV_Channels::set_rc_frequency(SRV_Channel::k_throttleLeft, speed_hz);
-    SRV_Channels::set_rc_frequency(SRV_Channel::k_throttleRight, speed_hz);
+    SRV_Channels::set_rc_frequency(SRV_Channel::k_motor1, speed_hz);
+    SRV_Channels::set_rc_frequency(SRV_Channel::k_motor2, speed_hz);
+    SRV_Channels::set_rc_frequency(SRV_Channel::k_motor3, speed_hz);
+    SRV_Channels::set_rc_frequency(SRV_Channel::k_motor4, speed_hz);
 }
 
 void AP_MotorsTailsitter::output_to_motors()
@@ -83,20 +90,26 @@ void AP_MotorsTailsitter::output_to_motors()
             _actuator[0] = 0.0f;
             _actuator[1] = 0.0f;
             _actuator[2] = 0.0f;
+            _actuator[3] = 0.0f;
+            _actuator[4] = 0.0f;
             _external_min_throttle = 0.0;
             break;
         case SpoolState::GROUND_IDLE:
             set_actuator_with_slew(_actuator[0], actuator_spin_up_to_ground_idle());
             set_actuator_with_slew(_actuator[1], actuator_spin_up_to_ground_idle());
             set_actuator_with_slew(_actuator[2], actuator_spin_up_to_ground_idle());
+            set_actuator_with_slew(_actuator[3], actuator_spin_up_to_ground_idle());
+            set_actuator_with_slew(_actuator[4], actuator_spin_up_to_ground_idle());
             _external_min_throttle = 0.0;
             break;
         case SpoolState::SPOOLING_UP:
         case SpoolState::THROTTLE_UNLIMITED:
         case SpoolState::SPOOLING_DOWN:
-            set_actuator_with_slew(_actuator[0], thrust_to_actuator(_thrust_left));
-            set_actuator_with_slew(_actuator[1], thrust_to_actuator(_thrust_right));
-            set_actuator_with_slew(_actuator[2], thrust_to_actuator(_throttle));
+            set_actuator_with_slew(_actuator[0], thrust_to_actuator(_k_motor1));
+            set_actuator_with_slew(_actuator[1], thrust_to_actuator(_k_motor2));
+            set_actuator_with_slew(_actuator[2], thrust_to_actuator(_k_motor3));
+            set_actuator_with_slew(_actuator[3], thrust_to_actuator(_k_motor4));
+            set_actuator_with_slew(_actuator[4], thrust_to_actuator(_throttle));
             break;
     }
 
@@ -104,7 +117,7 @@ void AP_MotorsTailsitter::output_to_motors()
     SRV_Channels::set_output_pwm(SRV_Channel::k_throttleRight, output_to_pwm(_actuator[1]));
 
     // use set scaled to allow a different PWM range on plane forward throttle, throttle range is 0 to 100
-    SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, _actuator[2]*100);
+    SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, _actuator[4]*100);
 
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_left*SERVO_OUTPUT_RANGE);
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, _tilt_right*SERVO_OUTPUT_RANGE);
@@ -117,10 +130,16 @@ uint32_t AP_MotorsTailsitter::get_motor_mask()
 {
     uint32_t motor_mask = 0;
     uint8_t chan;
-    if (SRV_Channels::find_channel(SRV_Channel::k_throttleLeft, chan)) {
+    if (SRV_Channels::find_channel(SRV_Channel::k_motor1, chan)) {
         motor_mask |= 1U << chan;
     }
-    if (SRV_Channels::find_channel(SRV_Channel::k_throttleRight, chan)) {
+    if (SRV_Channels::find_channel(SRV_Channel::k_motor2, chan)) {
+        motor_mask |= 1U << chan;
+    }
+    if (SRV_Channels::find_channel(SRV_Channel::k_motor3, chan)) {
+        motor_mask |= 1U << chan;
+    }
+    if (SRV_Channels::find_channel(SRV_Channel::k_motor4, chan)) {
         motor_mask |= 1U << chan;
     }
 
@@ -140,6 +159,8 @@ void AP_MotorsTailsitter::output_armed_stabilizing()
     float   thrust_max;                 // highest motor value
     float   thrust_min;                 // lowest motor value
     float   thr_adj = 0.0f;             // the difference between the pilot's desired throttle and throttle_thrust_best_rpy
+    float   mode_switch = rc().get_radio_in (CH_7);
+    float   mode_switch2 = rc().get_radio_in (CH_6);
 
     // apply voltage and air pressure compensation
     const float compensation_gain = get_compensation_gain();
@@ -169,9 +190,42 @@ void AP_MotorsTailsitter::output_armed_stabilizing()
         limit.roll = true;
     }
 
-    // calculate left and right throttle outputs
-    _thrust_left  = throttle_thrust + roll_thrust * 0.5f;
-    _thrust_right = throttle_thrust - roll_thrust * 0.5f;
+    // 7通道的高档位，小固定翼不作用，飞行器正常四轴飞行
+    if ( mode_switch > 1750.0f){
+        _k_motor1 =   0.707 * 0.14f * roll_thrust + 0.707 * 0.14f * pitch_thrust + 0.14f * yaw_thrust + throttle_thrust;
+        _k_motor2 = - 0.707 * 0.14f * roll_thrust - 0.707 * 0.14f * pitch_thrust + 0.14f * yaw_thrust + throttle_thrust;
+        _k_motor3 =   0.707 * 0.14f * roll_thrust - 0.707 * 0.14f * pitch_thrust - 0.14f * yaw_thrust + throttle_thrust;
+        _k_motor4 = - 0.707 * 0.14f * roll_thrust + 0.707 * 0.14f * pitch_thrust - 0.14f * yaw_thrust + throttle_thrust;
+        gcs().send_text(MAV_SEVERITY_CRITICAL, "No Tilt! %.2f", 5.23f);
+    }
+    //7通道的中挡位，小固定翼产生小角度迎角进行飞行
+    else if ( mode_switch > 1250.0f){
+        _k_motor1 =   0.707 * 0.14f * roll_thrust + 0.707 * 0.14f * pitch_thrust + 0.14f * yaw_thrust + throttle_thrust;
+        _k_motor2 = - 0.707 * 0.14f * roll_thrust - 0.707 * 0.14f * pitch_thrust + 0.14f * yaw_thrust + throttle_thrust;
+        _k_motor3 =   0.707 * 0.14f * roll_thrust - 0.707 * 0.14f * pitch_thrust - 0.14f * yaw_thrust + throttle_thrust;
+        _k_motor4 = - 0.707 * 0.14f * roll_thrust + 0.707 * 0.14f * pitch_thrust - 0.14f * yaw_thrust + throttle_thrust;
+
+        hal.rcout -> write ( 4, 1700 );//左侧舵机CH5抬起，形成迎角，力向上
+        hal.rcout -> write ( 5, 1700 );//右侧舵机CH6抬起，形成迎角，力向上
+        gcs().send_text(MAV_SEVERITY_CRITICAL, "Tilt!_++ %.2f", 5.8f);
+
+        if ( mode_switch2 > 1500.0f ){
+             hal.rcout -> write ( 4, 1900 );//左侧舵机CH5大角度倾转急停                   
+             hal.rcout -> write ( 5, 1900 );//右侧舵机CH6大角度倾转急停
+             gcs().send_text(MAV_SEVERITY_CRITICAL, "Tilt!_++Stop %.2f", 5.23f);
+        }
+    }
+    //7通道的低档位，小固定翼产生大角度负迎角，将旋翼力改为向下，使飞行器力向下潜入水中
+    else if ( mode_switch > 850.0f){
+        _k_motor1 =  0.5f * ( throttle_thrust + 0.707 * 0.14f * pitch_thrust );
+        _k_motor2 =  0.5f * ( throttle_thrust - 0.707 * 0.14f * pitch_thrust );
+        _k_motor3 =  0.5f * ( throttle_thrust - 0.707 * 0.14f * pitch_thrust );
+        _k_motor4 =  0.5f * ( throttle_thrust + 0.707 * 0.14f * pitch_thrust );
+
+        hal.rcout -> write ( 4, 1000 );//左侧舵机CH5抬起，形成负迎角，力向下
+        hal.rcout -> write ( 5, 1000 );//右侧舵机CH6抬起，形成负迎角，力向下
+        gcs().send_text(MAV_SEVERITY_CRITICAL, "Tilt!_--Dive %.2f", 5.23f);      
+    }
 
     thrust_max = MAX(_thrust_right,_thrust_left);
     thrust_min = MIN(_thrust_right,_thrust_left);
@@ -195,8 +249,10 @@ void AP_MotorsTailsitter::output_armed_stabilizing()
     }
 
     // Add adjustment to reduce average throttle
-    _thrust_left  = constrain_float(_thrust_left  + thr_adj, 0.0f, 1.0f);
-    _thrust_right = constrain_float(_thrust_right + thr_adj, 0.0f, 1.0f);
+    _k_motor1  = constrain_float(_k_motor1  + thr_adj, 0.0f, 1.0f);
+    _k_motor2  = constrain_float(_k_motor2  + thr_adj, 0.0f, 1.0f);
+    _k_motor3  = constrain_float(_k_motor3  + thr_adj, 0.0f, 1.0f);
+    _k_motor4  = constrain_float(_k_motor4  + thr_adj, 0.0f, 1.0f);
 
     _throttle = throttle_thrust;
 
@@ -209,8 +265,8 @@ void AP_MotorsTailsitter::output_armed_stabilizing()
     }
 
     // thrust vectoring
-    _tilt_left  = pitch_thrust - yaw_thrust;
-    _tilt_right = pitch_thrust + yaw_thrust;
+    //_tilt_left  = pitch_thrust - yaw_thrust;
+    //_tilt_right = pitch_thrust + yaw_thrust;
 }
 
 // output_test_seq - spin a motor at the pwm value specified
@@ -222,19 +278,27 @@ void AP_MotorsTailsitter::_output_test_seq(uint8_t motor_seq, int16_t pwm)
     switch (motor_seq) {
         case 1:
             // right throttle
-            SRV_Channels::set_output_pwm(SRV_Channel::k_throttleRight, pwm);
+            SRV_Channels::set_output_pwm(SRV_Channel::k_motor1, pwm);
             break;
         case 2:
-            // right tilt servo
-            SRV_Channels::set_output_pwm(SRV_Channel::k_tiltMotorRight, pwm);
+            // right throttle
+            SRV_Channels::set_output_pwm(SRV_Channel::k_motor2, pwm);
             break;
         case 3:
-            // left throttle
-            SRV_Channels::set_output_pwm(SRV_Channel::k_throttleLeft, pwm);
+            // right throttle
+            SRV_Channels::set_output_pwm(SRV_Channel::k_motor3, pwm);
             break;
         case 4:
-            // left tilt servo
+            // right throttle
+            SRV_Channels::set_output_pwm(SRV_Channel::k_motor4, pwm);
+            break;
+        case 5:
+            // right tilt servo
             SRV_Channels::set_output_pwm(SRV_Channel::k_tiltMotorLeft, pwm);
+            break;
+        case 6:
+            // left tilt servo
+            SRV_Channels::set_output_pwm(SRV_Channel::k_tiltMotorRight, pwm);
             break;
         default:
             // do nothing
